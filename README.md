@@ -54,7 +54,7 @@ Follow these steps to set up the project on your local machine.
 
 ### 1. Clone the Repository
 ```bash
-git clone <your-repository-url>
+git clone https://github.com/erik-kreider/list-scrub-automation
 cd list-scrubber-project
 ```
 
