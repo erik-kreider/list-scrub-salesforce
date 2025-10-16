@@ -1,0 +1,33 @@
+# -----------------------------------------------------------------------------
+# Python Dependencies for the List Scrubber Project
+#
+# To install these dependencies, run the following command in your terminal
+# from the project's root directory, preferably within a virtual environment:
+#
+# pip install -r requirements.txt
+# -----------------------------------------------------------------------------
+
+# Core library for data manipulation and analysis (DataFrames)
+pandas==2.1.4
+
+# Fundamental package for scientific computing, a core dependency for pandas
+numpy==1.26.2
+
+# A Python library to read/write Excel 2010+ files.
+openpyxl==3.1.2
+
+# --- Database Connection ---
+# Python ODBC bridge for connecting to SQL databases
+pyodbc==5.0.1
+# The recommended database toolkit for use with pandas
+SQLAlchemy==2.0.23
+
+# --- Fuzzy Matching & Scoring ---
+# Library for fuzzy string matching (calculates string similarity)
+thefuzz==0.20.0
+# Optional but highly recommended C extension for thefuzz, making it much faster.
+python-Levenshtein==0.23.0
+
+# --- NEW: Advanced Text Matching Engine ---
+# Core library for machine learning, used here for TF-IDF and Cosine Similarity.
+scikit-learn==1.3.2
