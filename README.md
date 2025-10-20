@@ -1,138 +1,142 @@
-# Contact and Account List Scrubber
+# Salesforce List Scrubber
 
-## Overview
+## 🚀 Introduction
 
-This project provides a robust, command-line tool for scrubbing external contact and account lists against an internal SQL database. Its primary purpose is to identify existing records, prevent the creation of duplicates, and enrich incoming data with internal Account and Contact IDs.
+This project provides a powerful and flexible command-line tool to scrub third-party lead and contact lists against live data exports from Salesforce. Its primary purpose is to identify which records in a new list already exist as Accounts or Contacts in your Salesforce instance, preventing duplicate data entry and enriching incoming leads with existing data.
 
-The application is configuration-driven, allowing for easy updates to database credentials, file paths, and matching logic without altering the source code.
+The tool is designed to be resilient to messy data, using a sophisticated two-stage matching process that combines high-confidence email matching with advanced fuzzy logic scoring.
 
----
+## ✨ Key Features
 
-## Key Features
+-   **Dual Scrubbing Modes**: Perform scrubs for `account` or `contact` records.
+-   **Live Salesforce Query-Based**: Operates entirely on live exports from Salesforce, requiring a live database connection.
+-   **Advanced Normalization**: Cleans and standardizes various data fields (company names, websites, phone numbers, addresses) before matching to increase accuracy.
+-   **Two-Stage Matching Logic**:
+    1.  **Email First**: A high-speed, high-confidence pre-match based on contact email addresses.
+    2.  **Fuzzy Logic Scoring**: For remaining records, it uses a TF-IDF similarity search to find the best potential candidates, then scores each one based on a configurable weighted system.
+-   **Highly Configurable**: Easily control matching thresholds, scoring weights for each data field, and penalties for conflicting data via a simple `config.ini` file.
+-   **Flexible Penalty System**: Avoids rigid "knockout" rules by applying configurable penalties for mismatches (e.g., conflicting websites), making it robust against dirty data.
+-   **Clear Output**: Generates a primary output file with matched data appended, and a separate file for all unmatched records requiring manual review.
+# Salesforce List Scrubber
 
-*   **Dual Scrubbing Modes:** Separate, optimized workflows for scrubbing `account` lists and `contact` lists.
-*   **Configurable Matching Logic:** Easily enable or disable matching on fields like street address and website via command-line flags.
-*   **Weighted Scoring System:** A sophisticated scoring mechanism, configurable via `config.ini`, determines the "best" match based on customizable weights for different data fields.
-*   **Auditing Capability:** Generate an optional "base match" file that shows all potential matches for an input record, not just the best one.
-*   **Secure by Design:** Keeps sensitive information like database credentials out of the codebase and Git repository.
-*   **Modular and Maintainable:** The project is structured into logical modules for data I/O, normalization, and scrubbing logic, making it easy to extend and maintain.
+## What this project does
 
----
+A command-line tool that scrubs third-party lead and contact lists against Salesforce data. It identifies existing Accounts and Contacts in your Salesforce org and appends matched metadata to your input lists. Matching is performed with an email-first pass followed by a TF-IDF + fuzzy-scoring pipeline.
 
-## Project Structure
+This repository supports two operating modes:
+- account — find matching Salesforce Accounts for companies in a list
+- contact — find matching Salesforce Contacts (within previously matched Accounts)
 
-```
-list-scrubber-project/
-│
-├── .gitignore              # Specifies files and folders for Git to ignore
-├── config.example.ini      # Template for the configuration file
-├── main.py                 # The single entry point for the application
-├── README.md               # This documentation file
-├── requirements.txt        # Project dependencies
-│
-└── src/
-    └── datascrubber/
-        ├── __init__.py
-        ├── data_io.py      # Handles all data reading/writing (SQL, Excel)
-        ├── normalization.py# Contains all data cleaning and normalization functions
-        ├── scrubbing.py    # Core logic for the scrubbing process
-        └── sql_queries.py  # Stores SQL query strings
-```
+## Notable change: Salesforce API integration
 
----
+This version fetches Accounts and Contacts directly from Salesforce using the simple-salesforce library. You can run the scrubbers against live Salesforce data instead of static Excel exports. Authentication and connection settings are read from the `Salesforce` section of `config.ini` (see configuration below).
 
-## Prerequisites
+## Quick start
 
-*   Python 3.8+
-*   Git
+1. Create and activate a Python virtual environment (recommended):
 
----
-
-## Setup and Installation
-
-Follow these steps to set up the project on your local machine.
-
-### 1. Clone the Repository
-```bash
-git clone https://github.com/erik-kreider/list-scrub-automation
-cd list-scrub-automation
+```powershell
+python -m venv venv; .\venv\Scripts\Activate
 ```
 
-### 2. Create and Activate a Virtual Environment
-It is highly recommended to use a virtual environment to manage project dependencies.
+2. Install dependencies:
 
-**On Windows:**
-```bash
-python -m venv venv
-venv\Scripts\activate
-```
-
-**On macOS / Linux:**
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
-### 3. Install Dependencies
-Install all the required Python libraries using the `requirements.txt` file.
-```bash
+```powershell
 pip install -r requirements.txt
 ```
 
-### 4. Configure the Application
-The application uses a `config.ini` file for all its settings. This file must be created locally and will be ignored by Git to protect sensitive information.
+3. Configure `config.ini` (example below) with your paths and Salesforce credentials.
 
-*   **Create the file:** Copy the provided template.
-    ```bash
-    cp config.example.ini config.ini
-    ```
-*   **Edit `config.ini`:** Open the new `config.ini` file and fill in your specific details under each section:
-    *   `[Database]`: Add your SQL Server credentials (server, database, username, password).
-    *   `[Paths]`: Verify that the input and output directory paths are correct for your machine.
-    *   `[Scoring_*]`: Adjust the scoring weights if needed.
+4. Put the list you want to scrub into the `lists/` directory (filename without `.xlsx` is passed to the CLI).
 
-> **IMPORTANT:** The `config.ini` file is intentionally listed in `.gitignore`. **NEVER** commit this file to the repository.
+5. Run the account scrub:
 
----
-
-## Usage
-
-All commands should be run from the root of the project directory (`list-scrubber-project/`).
-
-### Account Scrub
-This mode scrubs an external list of accounts.
-
-**Basic Command:**
-Provide the `account` mode and the base name of the Excel file (without the `.xlsx` extension).
-```bash
-python main.py account YourAccountFileName
+```powershell
+python .\main.py account my_third_party_list
 ```
 
-**Command with All Options:**
-Enable street matching, website matching, and the creation of an audit file.
-```bash
-python main.py account YourAccountFileName --street-match --website-match --base-match
+Then run the contact scrub against the account output (optional):
+
+```powershell
+python .\main.py contact my_third_party_list_OUTPUT
 ```
-*   **Output:** This will generate `YourAccountFileName_OUTPUT.xlsx` in the configured output directory.
 
-### Contact Scrub
-This mode scrubs a list of contacts. It requires an account scrub to have been run first, as it uses the output from that process as its input.
+## Configuration (`config.ini`)
 
-**Command:**
-Provide the `contact` mode and the **original base name** of the file used in the account scrub. The script will automatically look for the `_OUTPUT.xlsx` version.
-```bash
-python main.py contact YourAccountFileName
+At minimum update the `Paths` and `Salesforce` sections. The code expects a file named `config.ini` in the repository root.
+
+Example minimal `config.ini`:
+
+```ini
+[Paths]
+input_directory = ./lists
+output_directory = ./lists
+
+[Salesforce]
+username = your_username@example.com
+password = your_password
+security_token = YOUR_SECURITY_TOKEN
+instance_type = login   ; optional (login or sandbox)
+
+[Fuzzy_Matching_Thresholds]
+minimum_final_score = 60
+minimum_contact_score = 45
+
+[Scoring_Weights]
+company_name = 50
+website = 40
+phone = 35
+street = 25
+postal_code = 15
+city = 10
+primary_lob = 10
+
+[Scoring_Penalties]
+conflicting_website_penalty = 20
+location_mismatch_penalty = 20
+
+[Scoring_Contact]
+email = 50
+first_name = 20
+last_name = 30
+title = 10
 ```
-*   **Input:** The script will automatically use `YourAccountFileName_OUTPUT.xlsx`.
-*   **Output:** This will generate `YourAccountFileName_C_OUTPUT.xlsx`.
 
----
+Notes:
+- `Salesforce` credentials are used to initialize a `simple_salesforce.Salesforce` client. Keep these credentials secure.
+- `minimum_final_score` controls how strict account fuzzy-matching is. Tune to your dataset.
 
-## Configuration Details
+## How the API integration works
 
-The behavior of the scrubber can be fine-tuned in `config.ini`:
+- On startup, `SalesforceConnector` reads `config.ini` -> `Salesforce` and attempts to connect with simple-salesforce.
+- Two SOQL queries (in `src/datascrubber/soql_queries.py`) fetch Account and Contact fields used by the scrubbers.
+- The connector method `query_to_dataframe(soql_query, description)` returns a pandas DataFrame with the query results.
 
-*   `[Database]`: Holds all connection details for the source database.
-*   `[Paths]`: Defines where the script looks for input Excel files and where it saves the output files.
-*   `[Scoring_Account]`: Contains the integer weights for each matching field in the account scrub. Higher numbers give a field more importance.
-*   `[Scoring_Contact]`: Contains the integer weights for the contact scrub.
+If Salesforce authentication fails the tool will raise and print the connector error.
+
+## Inputs and expected columns
+
+- Input lists (in `./lists`) should be Excel (`.xlsx`) files. Column headers are normalized to lowercase by the loader.
+- Typical input column names the code expects (normalized):
+  - company name, street address, city, state, postalcode, country, phone, website domain, email
+- Salesforce Account fields used (from SOQL): id, name, billingstreet, billingcity, billingstate, billingpostalcode, billingcountry, phone, website, primary_line_of_business__c, owner.name, ownerid, account_status__c, total_open_opps__c
+- Salesforce Contact fields used (from SOQL): accountid, id, firstname, lastname, email, phone, title
+
+The data loader (`src/datascrubber/data_io.py`) attempts to clean and normalize Salesforce report artifacts if you prefer to use static exports instead of the API.
+
+## Outputs
+
+- Account run: `<filename>_OUTPUT.xlsx` (matched columns appended) and `<filename>_MANUAL_REVIEW.xlsx` for unmatched rows (when present).
+- Contact run: `<filename>_C_OUTPUT.xlsx` (contact-level matches appended).
+
+## Developer notes
+
+- Primary modules live in `src/datascrubber/`.
+- `AccountScrubber.run()` and `ContactScrubber.run()` encapsulate the main workflows and use `SalesforceConnector` to fetch live data.
+- SOQL queries are defined in `src/datascrubber/soql_queries.py` and can be adjusted to include additional fields.
+
+Edge cases to consider when modifying or extending:
+- Missing or incorrect Salesforce credentials (authentication failure).
+- Very large Salesforce exports: the TF-IDF stage builds an in-memory matrix of Account search strings — watch memory usage for very large orgs.
+- Input files missing expected columns (the code normalizes headers but will raise on missing critical columns during contact scrub).
+
