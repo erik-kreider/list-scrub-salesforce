@@ -11,9 +11,8 @@ from . import soql_queries
 
 class AccountScrubber:
     """
-    Handles the account scrubbing workflow, now fetching data directly from Salesforce.
+    Handles the account scrubbing workflow, fetching data directly from Salesforce.
     """
-
     def __init__(self, config, filename):
         self.config = config
         self.paths = config['Paths']
@@ -26,7 +25,6 @@ class AccountScrubber:
         self.output_path = os.path.join(self.paths['output_directory'], f"{filename}_OUTPUT.xlsx")
         self.manual_review_path = os.path.join(self.paths['output_directory'], f"{filename}_MANUAL_REVIEW.xlsx")
 
-        # Initialize the Salesforce connector
         self.sf_connector = SalesforceConnector(config)
 
     def _score_candidate(self, scrub_row, db_row):
@@ -45,7 +43,6 @@ class AccountScrubber:
         if scrub_state and db_state and scrub_state != db_state:
             score -= penalty; details.append(f"StateMismatch(-{penalty:.0f})")
 
-        # Scoring logic
         name_sim = fuzz.token_set_ratio(scrub_row.get('normalizedcompany', ''), db_row.get('normalizedcompany', ''))
         name_score = float(self.weights['company_name']) * (name_sim / 100.0)
         if name_score > 1: score += name_score; details.append(f"Name({name_score:.0f})")
@@ -74,7 +71,7 @@ class AccountScrubber:
             postal_score = float(self.weights['postal_code'])
             score += postal_score; details.append(f"Postal({postal_score:.0f})")
 
-        lob_sim = fuzz.token_set_ratio(scrub_row.get('lob', ''), db_row.get('lob', ''))
+        lob_sim = fuzz.token_set_ratio(scrub_row.get('normalized_lob', ''), db_row.get('normalized_lob', ''))
         lob_score = float(self.weights.get('primary_lob', 0)) * (lob_sim / 100.0)
         if lob_score > 1: score += lob_score; details.append(f"LOB({lob_score:.0f})")
 
@@ -89,11 +86,9 @@ class AccountScrubber:
         print("\n[Stage 1/4] Loading local scrub file and fetching Salesforce data...")
         scrub_df = data_io.load_scrub_file(self.input_path)
         
-        # Fetch data from Salesforce API
         accounts_df = self.sf_connector.query_to_dataframe(soql_queries.ACCOUNTS_QUERY, "all accounts")
         contacts_df = self.sf_connector.query_to_dataframe(soql_queries.CONTACTS_QUERY, "all contacts")
         
-        # Standardize headers of data coming from Salesforce (they will be mixed case)
         accounts_df.columns = accounts_df.columns.str.lower()
         contacts_df.columns = contacts_df.columns.str.lower()
         
@@ -128,7 +123,7 @@ class AccountScrubber:
             df = normalization.normalize_text_field(df, 'city', 'city')
             df = normalization.normalize_text_field(df, 'state', 'state')
             df = normalization.normalize_text_field(df, 'country', 'country')
-            df = normalization.normalize_text_field(df, 'lob', 'lob')
+            df = normalization.normalize_text_field(df, 'lob', 'normalized_lob')
         
         accounts_df['search_string'] = (
             accounts_df['normalizedcompany'].fillna('') + ' ' +
@@ -209,7 +204,7 @@ class AccountScrubber:
         fuzzy_matches_df = pd.DataFrame(all_fuzzy_matches)
         print(f"-> Found {len(fuzzy_matches_df)} records with a confident fuzzy match.")
 
-        # 4. FINALIZE AND SAVE
+        # 4. FINALIZE AND SAVE 
         print("\n[Stage 4/4] Finalizing and saving results...")
         final_match_columns = [
             'original_index', 'matched_accountid', 'match_score', 'match_type',
