@@ -76,8 +76,14 @@ def normalize_phone(df: pd.DataFrame, source_col: str) -> pd.DataFrame:
         df['normalizedphone'] = ''
         return df
 
-    # Extract all digits from the string
-    df['normalizedphone'] = df[source_col].astype(str).str.extractall('(\d)').unstack().fillna('').agg(''.join, axis=1)
+    # Extract all digits from the string in a robust way
+    def digits_only(val):
+        if pd.isna(val):
+            return ''
+        s = str(val)
+        return ''.join(ch for ch in s if ch.isdigit())
+
+    df['normalizedphone'] = df[source_col].apply(digits_only)
     return df
 
 def normalize_state(df: pd.DataFrame, source_col: str) -> pd.DataFrame:

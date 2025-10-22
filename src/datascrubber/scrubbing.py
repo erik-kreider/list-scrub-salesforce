@@ -248,6 +248,9 @@ class ContactScrubber:
         self.threshold = float(config.get('Fuzzy_Matching_Thresholds', 'minimum_contact_score', fallback=60))
         self.weights = config['Scoring_Contact'] if 'Scoring_Contact' in config else {}
 
+        # Load contact field mappings from config for flexibility
+        self.contact_map = {v.lower(): k for k, v in config.items('Contact_Field_Map')}
+
         self.input_path = os.path.join(self.paths['output_directory'], f"{filename}.xlsx")
         self.output_path = self.input_path.replace('.xlsx', '_C_OUTPUT.xlsx')
 
@@ -255,29 +258,54 @@ class ContactScrubber:
         self.sf_connector = SalesforceConnector(config)
 
     def _score_candidate_contact(self, scrub_row, db_row):
+        """
+        Calculates a fuzzy match score between a contact from the scrub file
+        and a candidate contact from Salesforce, using field mappings from the config.
+        """
         score, match_details = 0, []
-        
-        # Ensure scrub_row keys are lowercase for consistent access
-        scrub_row_lower = {k.lower(): v for k, v in scrub_row.items()}
 
-        if scrub_row_lower.get('email') and scrub_row_lower.get('email') == db_row.get('email'):
+        # Get the original column names from the mapping
+        email_col = self.contact_map.get('email', 'email')
+        fname_col = self.contact_map.get('firstname', 'firstname')
+        lname_col = self.contact_map.get('lastname', 'lastname')
+        title_col = self.contact_map.get('title', 'title')
+
+        # Email scoring
+        scrub_email = scrub_row.get(email_col)
+        db_email = db_row.get('email', '')
+        if scrub_email and pd.notna(scrub_email) and str(scrub_email).lower() == str(db_email).lower():
             email_score = float(self.weights.get('email', 0))
-            score += email_score; match_details.append(f"Email({email_score:.0f})")
+            score += email_score
+            match_details.append(f"Email({email_score:.0f})")
 
-        sim = fuzz.ratio(scrub_row_lower.get('firstname', ''), db_row.get('firstname', ''))
+        # First Name scoring
+        scrub_fname = str(scrub_row.get(fname_col, ''))
+        db_fname = str(db_row.get('firstname', ''))
+        sim = fuzz.ratio(scrub_fname.lower(), db_fname.lower())
         name_score = float(self.weights.get('first_name', 0)) * (sim / 100.0)
-        if name_score > 0.1: score += name_score; match_details.append(f"First({name_score:.1f})")
+        if name_score > 0.1:
+            score += name_score
+            match_details.append(f"First({name_score:.1f})")
 
-        sim = fuzz.ratio(scrub_row_lower.get('lastname', ''), db_row.get('lastname', ''))
+        # Last Name scoring
+        scrub_lname = str(scrub_row.get(lname_col, ''))
+        db_lname = str(db_row.get('lastname', ''))
+        sim = fuzz.ratio(scrub_lname.lower(), db_lname.lower())
         name_score = float(self.weights.get('last_name', 0)) * (sim / 100.0)
-        if name_score > 0.1: score += name_score; match_details.append(f"Last({name_score:.1f})")
-        
-        sim = fuzz.token_set_ratio(scrub_row_lower.get('title', ''), db_row.get('title', ''))
-        title_score = float(self.weights.get('title', 0)) * (sim / 100.0)
-        if title_score > 0.1: score += title_score; match_details.append(f"Title({title_score:.1f})")
-        
-        return score, ",".join(match_details)
+        if name_score > 0.1:
+            score += name_score
+            match_details.append(f"Last({name_score:.1f})")
 
+        # Title scoring
+        scrub_title = str(scrub_row.get(title_col, ''))
+        db_title = str(db_row.get('title', ''))
+        sim = fuzz.token_set_ratio(scrub_title.lower(), db_title.lower())
+        title_score = float(self.weights.get('title', 0)) * (sim / 100.0)
+        if title_score > 0.1:
+            score += title_score
+            match_details.append(f"Title({title_score:.1f})")
+            
+        return score, ",".join(match_details)
 
     def run(self):
         """Executes the contact scrubbing workflow using live Salesforce data."""
@@ -318,15 +346,19 @@ class ContactScrubber:
         print("\n*** STAGE 3: Finding Best Match for Each Contact ***")
         all_best_matches = []
         records_to_match = scrub_df[scrub_df['matched_accountid'].notna()]
+        
         for _, scrub_row in records_to_match.iterrows():
             account_id = scrub_row['matched_accountid']
             candidates = contacts_by_account.get(account_id, [])
-            if not candidates: continue
+            if not candidates:
+                continue
+                
             best_candidate_details = None
             highest_score = -1
+            
             for candidate_row in candidates:
-                # Pass scrub_row as a dictionary
-                score, details = self._score_candidate_contact(scrub_row.to_dict(), candidate_row)
+                # Pass the scrub_row Series, which acts like a dict for scoring
+                score, details = self._score_candidate_contact(scrub_row, candidate_row)
                 if score > highest_score:
                     highest_score = score
                     best_candidate_details = {
@@ -340,6 +372,7 @@ class ContactScrubber:
                         'ContactMatchScore': score,
                         'ContactMatchType': details
                     }
+
             if highest_score >= self.threshold:
                 all_best_matches.append(best_candidate_details)
         
@@ -351,7 +384,8 @@ class ContactScrubber:
             matches_df = pd.DataFrame(all_best_matches)
             results_df = pd.merge(scrub_df, matches_df, on='original_index', how='left')
         else:
-            results_df = scrub_df
+            results_df = scrub_df.copy() # Use a copy to avoid SettingWithCopyWarning
+            
         results_df.drop(columns=['original_index'], inplace=True, errors='ignore')
         data_io.save_to_excel(results_df, self.output_path)
 

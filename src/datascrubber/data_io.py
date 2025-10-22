@@ -19,7 +19,9 @@ def load_scrub_file(filepath: str) -> pd.DataFrame:
 def save_to_excel(df: pd.DataFrame, filepath: str):
     """Saves a DataFrame to an Excel file, creating directories if needed."""
     expanded_path = os.path.expanduser(filepath)
-    os.makedirs(os.path.dirname(expanded_path), exist_ok=True)
-    
+    dirpath = os.path.dirname(expanded_path)
+    if dirpath:
+        os.makedirs(dirpath, exist_ok=True)
+
     df.to_excel(expanded_path, index=False)
     print(f"✅ Output saved to: {expanded_path}")
