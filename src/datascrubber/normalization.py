@@ -80,9 +80,39 @@ def normalize_phone(df: pd.DataFrame, source_col: str) -> pd.DataFrame:
     df['normalizedphone'] = df[source_col].astype(str).str.extractall('(\d)').unstack().fillna('').agg(''.join, axis=1)
     return df
 
+def normalize_state(df: pd.DataFrame, source_col: str) -> pd.DataFrame:
+    """
+    Normalizes US state names and abbreviations to a standard 2-letter format.
+    Creates 'normalizedstate' column.
+    """
+    if source_col not in df.columns:
+        df['normalizedstate'] = ''
+        return df
+
+    state_map = {
+        'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR', 'california': 'CA',
+        'colorado': 'CO', 'connecticut': 'CT', 'delaware': 'DE', 'florida': 'FL', 'georgia': 'GA',
+        'hawaii': 'HI', 'idaho': 'ID', 'illinois': 'IL', 'indiana': 'IN', 'iowa': 'IA',
+        'kansas': 'KS', 'kentucky': 'KY', 'louisiana': 'LA', 'maine': 'ME', 'maryland': 'MD',
+        'massachusetts': 'MA', 'michigan': 'MI', 'minnesota': 'MN', 'mississippi': 'MS',
+        'missouri': 'MO', 'montana': 'MT', 'nebraska': 'NE', 'nevada': 'NV',
+        'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY',
+        'north carolina': 'NC', 'north dakota': 'ND', 'ohio': 'OH', 'oklahoma': 'OK',
+        'oregon': 'OR', 'pennsylvania': 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
+        'south dakota': 'SD', 'tennessee': 'TN', 'texas': 'TX', 'utah': 'UT', 'vermont': 'VT',
+        'virginia': 'VA', 'washington': 'WA', 'west virginia': 'WV', 'wisconsin': 'WI',
+        'wyoming': 'WY', 'district of columbia': 'DC', 'puerto rico': 'PR'
+    }
+    
+    s = df[source_col].astype(str).str.lower().str.strip()
+    s = s.map(state_map).fillna(s)
+    df['normalizedstate'] = s.str.slice(0, 2).str.upper()
+    return df
+
+
 def normalize_text_field(df: pd.DataFrame, source_col: str, dest_col: str) -> pd.DataFrame:
     """
-    A generic function for simple text fields like city, state, country, LOB.
+    A generic function for simple text fields like city, country, LOB.
     """
     if source_col not in df.columns:
         df[dest_col] = ''

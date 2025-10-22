@@ -1,6 +1,8 @@
 # SOQL Queries for fetching Salesforce data.
 
 # Fetches all relevant fields from Accounts for matching.
+# You can add new fields to this query, and they will be automatically
+# appended to the final output file.
 ACCOUNTS_QUERY = """
 SELECT
     Id,

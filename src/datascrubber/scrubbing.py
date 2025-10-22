@@ -20,6 +20,10 @@ class AccountScrubber:
         self.weights = config['Scoring_Weights']
         self.penalties = dict(config.items('Scoring_Penalties')) if config.has_section('Scoring_Penalties') else {}
         
+        # Load field mappings from config
+        self.scrub_map = {k.lower(): v for k, v in config.items('Scrub_Field_Map')}
+        self.sf_map = {k.lower(): v for k, v in config.items('Salesforce_Field_Map')}
+
         self.filename = filename
         self.input_path = os.path.join(self.paths['input_directory'], f"{filename}.xlsx")
         self.output_path = os.path.join(self.paths['output_directory'], f"{filename}_OUTPUT.xlsx")
@@ -33,15 +37,19 @@ class AccountScrubber:
         
         penalty = float(self.penalties.get('location_mismatch_penalty', 0))
         
-        scrub_country = scrub_row.get('country', '')
-        db_country = db_row.get('country', '')
+        scrub_country = scrub_row.get('normalizedcountry', '')
+        db_country = db_row.get('normalizedcountry', '')
         if scrub_country and db_country and scrub_country != db_country:
             score -= penalty; details.append(f"CountryMismatch(-{penalty:.0f})")
 
-        scrub_state = scrub_row.get('state', '')
-        db_state = db_row.get('state', '')
+        scrub_state = scrub_row.get('normalizedstate', '')
+        db_state = db_row.get('normalizedstate', '')
         if scrub_state and db_state and scrub_state != db_state:
             score -= penalty; details.append(f"StateMismatch(-{penalty:.0f})")
+        elif scrub_state and db_state and scrub_state == db_state:
+            state_score = float(self.weights.get('state', 0))
+            if state_score > 0: score += state_score; details.append(f"State({state_score:.0f})")
+
 
         name_sim = fuzz.token_set_ratio(scrub_row.get('normalizedcompany', ''), db_row.get('normalizedcompany', ''))
         name_score = float(self.weights['company_name']) * (name_sim / 100.0)
@@ -63,11 +71,11 @@ class AccountScrubber:
         street_score = float(self.weights['street']) * (street_sim / 100.0)
         if street_score > 1: score += street_score; details.append(f"Street({street_score:.0f})")
         
-        city_sim = fuzz.ratio(scrub_row.get('city', ''), db_row.get('city', ''))
+        city_sim = fuzz.ratio(scrub_row.get('normalizedcity', ''), db_row.get('normalizedcity', ''))
         city_score = float(self.weights.get('city', 0)) * (city_sim / 100.0)
         if city_score > 1: score += city_score; details.append(f"City({city_score:.0f})")
 
-        if scrub_row.get('normalizedpostal') and db_row.get('normalizedpostal') == db_row.get('normalizedpostal'):
+        if scrub_row.get('normalizedpostal') and scrub_row.get('normalizedpostal') == db_row.get('normalizedpostal'):
             postal_score = float(self.weights['postal_code'])
             score += postal_score; details.append(f"Postal({postal_score:.0f})")
 
@@ -77,6 +85,28 @@ class AccountScrubber:
 
         return score, ",".join(details)
 
+    def _rename_and_normalize(self, df, mapping):
+        """Renames columns based on the provided map and runs all normalizers."""
+        # Create a copy for processing, leaving original df intact
+        proc_df = df.copy()
+        proc_df.columns = proc_df.columns.str.lower().str.strip()
+        
+        # Build the rename map from the config mapping
+        rename_map = {k: v for k, v in mapping.items() if k in proc_df.columns}
+        proc_df = proc_df.rename(columns=rename_map)
+        
+        # Normalize all relevant fields
+        proc_df = normalization.normalize_company(proc_df, 'company')
+        proc_df = normalization.normalize_website(proc_df, 'website')
+        proc_df = normalization.normalize_phone(proc_df, 'phone')
+        proc_df = normalization.normalize_street(proc_df, 'street')
+        proc_df = normalization.normalize_postal(proc_df, 'postal')
+        proc_df = normalization.normalize_state(proc_df, 'state')
+        proc_df = normalization.normalize_text_field(proc_df, 'city', 'normalizedcity')
+        proc_df = normalization.normalize_text_field(proc_df, 'country', 'normalizedcountry')
+        proc_df = normalization.normalize_text_field(proc_df, 'lob', 'normalized_lob')
+        return proc_df
+
     def run(self):
         """Executes the full account scrubbing workflow using live Salesforce data."""
         start_time = time.time()
@@ -84,46 +114,20 @@ class AccountScrubber:
 
         # 1. LOAD DATA
         print("\n[Stage 1/4] Loading local scrub file and fetching Salesforce data...")
-        scrub_df = data_io.load_scrub_file(self.input_path)
+        original_scrub_df = data_io.load_scrub_file(self.input_path)
+        original_scrub_df['original_index'] = original_scrub_df.index
         
-        accounts_df = self.sf_connector.query_to_dataframe(soql_queries.ACCOUNTS_QUERY, "all accounts")
-        contacts_df = self.sf_connector.query_to_dataframe(soql_queries.CONTACTS_QUERY, "all contacts")
-        
-        accounts_df.columns = accounts_df.columns.str.lower()
-        contacts_df.columns = contacts_df.columns.str.lower()
-        
-        scrub_df['original_index'] = scrub_df.index
-        original_scrub_df = scrub_df.copy()
+        accounts_df_orig = self.sf_connector.query_to_dataframe(soql_queries.ACCOUNTS_QUERY, "all accounts")
+        contacts_df_orig = self.sf_connector.query_to_dataframe(soql_queries.CONTACTS_QUERY, "all contacts")
 
-        # 2. RENAME & NORMALIZE
-        print("\n[Stage 2/4] Renaming and Normalizing Data...")
-        scrub_map = {
-            'company name': 'company', 'street address': 'street', 'city': 'city', 
-            'state': 'state', 'postalcode': 'postal', 'country': 'country',
-            'phone': 'phone', 'website domain': 'website', 'primary lob': 'lob'
-        }
-        accounts_map = {
-            'id': 'account_id', 'name': 'company', 'billingstreet': 'street', 
-            'billingcity': 'city', 'billingstate': 'state', 'billingpostalcode': 'postal', 
-            'billingcountry': 'country', 'phone': 'phone', 'website': 'website',
-            'primary_line_of_business__c': 'lob', 'owner.name': 'owner_name', 
-            'ownerid': 'owner_id', 'account_status__c': 'account_status', 
-            'total_open_opps__c': 'total_open_opps'
-        }
+        # 2. RENAME & NORMALIZE (on copies of the data)
+        print("\n[Stage 2/4] Normalizing Data for Matching...")
+        scrub_df = self._rename_and_normalize(original_scrub_df, self.scrub_map)
+        accounts_df = self._rename_and_normalize(accounts_df_orig, self.sf_map)
         
-        scrub_df = scrub_df.rename(columns=scrub_map)
-        accounts_df = accounts_df.rename(columns=accounts_map)
-        
-        for df in [scrub_df, accounts_df]:
-            df = normalization.normalize_company(df, 'company')
-            df = normalization.normalize_website(df, 'website')
-            df = normalization.normalize_phone(df, 'phone')
-            df = normalization.normalize_street(df, 'street')
-            df = normalization.normalize_postal(df, 'postal')
-            df = normalization.normalize_text_field(df, 'city', 'city')
-            df = normalization.normalize_text_field(df, 'state', 'state')
-            df = normalization.normalize_text_field(df, 'country', 'country')
-            df = normalization.normalize_text_field(df, 'lob', 'normalized_lob')
+        # For contact matching
+        contacts_df = contacts_df_orig.copy()
+        contacts_df.columns = contacts_df.columns.str.lower()
         
         accounts_df['search_string'] = (
             accounts_df['normalizedcompany'].fillna('') + ' ' +
@@ -134,9 +138,11 @@ class AccountScrubber:
         # 3. PERFORM MATCHING
         print("\n[Stage 3/4] Performing email and fuzzy matching...")
         email_matches_final = pd.DataFrame()
-        if 'email' in scrub_df.columns and 'email' in contacts_df.columns:
-            scrub_df['email'] = scrub_df['email'].astype(str)
-            contacts_df['email'] = contacts_df['email'].astype(str)
+        email_col_name = next((k for k, v in self.scrub_map.items() if v == 'email'), None)
+        
+        if email_col_name and email_col_name in scrub_df.columns and 'email' in contacts_df.columns:
+            scrub_df['email'] = scrub_df[email_col_name].astype(str).str.lower()
+            contacts_df['email'] = contacts_df['email'].astype(str).str.lower()
             
             email_matched_ids = pd.merge(
                 scrub_df[['original_index', 'email']],
@@ -146,27 +152,25 @@ class AccountScrubber:
             
             if not email_matched_ids.empty:
                 email_matches_details = pd.merge(
-                    email_matched_ids, accounts_df,
-                    left_on='accountid', right_on='account_id', how='left'
+                    email_matched_ids, accounts_df_orig,
+                    left_on='accountid', right_on='Id', how='left'
                 )
+                email_matches_details = email_matches_details.rename(columns={'Id': 'matched_accountid'})
                 email_matches_details['match_score'] = 100
                 email_matches_details['match_type'] = "Email Match"
-                
-                email_matches_final = email_matches_details.rename(columns={'account_id': 'matched_accountid', 'company': 'matched_company_name'})
-                for col in ['owner_name', 'owner_id', 'account_status', 'total_open_opps', 'lob']:
-                    if col not in email_matches_final.columns: email_matches_final[col] = ''
+                email_matches_final = email_matches_details
 
         print(f"-> Found {len(email_matches_final)} records with a direct email match.")
         
         ids_to_skip = email_matches_final['original_index'] if not email_matches_final.empty else []
-        fuzzy_search_df = scrub_df[~scrub_df['original_index'].isin(ids_to_skip)]
+        fuzzy_search_df = scrub_df[~scrub_df.index.isin(ids_to_skip)]
         
         all_fuzzy_matches = []
         if not fuzzy_search_df.empty:
             vectorizer = TfidfVectorizer(min_df=1, analyzer='char_wb', ngram_range=(3, 5))
             tfidf_matrix = vectorizer.fit_transform(accounts_df['search_string'])
 
-            for _, row in fuzzy_search_df.iterrows():
+            for index, row in fuzzy_search_df.iterrows():
                 row_search_string = (
                     row.get('normalizedcompany', '') + ' ' +
                     row.get('normalizedwebsite', '') + ' ' +
@@ -181,21 +185,18 @@ class AccountScrubber:
                 highest_score = -1
 
                 for idx in top_indices:
-                    candidate = accounts_df.iloc[idx]
-                    score, details = self._score_candidate(row, candidate)
+                    db_proc_row = accounts_df.iloc[idx]
+                    score, details = self._score_candidate(row, db_proc_row)
                     if score > highest_score:
                         highest_score = score
+                        # Get the original SF record to preserve column names and extra data
+                        original_sf_record = accounts_df_orig.iloc[idx].to_dict()
                         best_match = {
-                            'original_index': row['original_index'],
-                            'matched_accountid': candidate['account_id'],
+                            'original_index': index,
+                            'matched_accountid': original_sf_record.get('Id'),
                             'match_score': score,
                             'match_type': details,
-                            'matched_company_name': candidate.get('company'),
-                            'lob': candidate.get('lob'),
-                            'owner_name': candidate.get('owner_name'),
-                            'owner_id': candidate.get('owner_id'),
-                            'account_status': candidate.get('account_status'),
-                            'total_open_opps': candidate.get('total_open_opps')
+                            **original_sf_record # Append all original SF fields
                         }
 
                 if highest_score >= float(self.thresholds['minimum_final_score']):
@@ -206,34 +207,24 @@ class AccountScrubber:
 
         # 4. FINALIZE AND SAVE 
         print("\n[Stage 4/4] Finalizing and saving results...")
-        final_match_columns = [
-            'original_index', 'matched_accountid', 'match_score', 'match_type',
-            'matched_company_name', 'lob', 'owner_name', 'owner_id', 
-            'account_status', 'total_open_opps'
-        ]
         
-        email_cols = [col for col in final_match_columns if col in email_matches_final.columns]
-        fuzzy_cols = [col for col in final_match_columns if col in fuzzy_matches_df.columns]
-        
-        final_matches = pd.concat([
-            email_matches_final[email_cols] if not email_matches_final.empty else pd.DataFrame(columns=final_match_columns), 
-            fuzzy_matches_df[fuzzy_cols] if not fuzzy_matches_df.empty else pd.DataFrame(columns=final_match_columns)
-        ], ignore_index=True)
-        
+        # Combine email and fuzzy matches
+        final_matches = pd.concat([email_matches_final, fuzzy_matches_df], ignore_index=True)
+
+        # Prepare for merge by renaming original SF 'Id' to avoid clashes
+        if 'Id' in final_matches.columns:
+            final_matches = final_matches.rename(columns={'Id': 'matched_accountid_sf'})
+
+        # Merge results back to the original dataframe
         output_df = pd.merge(original_scrub_df, final_matches, on='original_index', how='left')
         
-        final_rename_map = {
-            'matched_company_name': 'Matched Company Name', 'lob': 'Matched Primary LOB',
-            'owner_name': 'Matched Owner Name', 'owner_id': 'Matched Owner ID',
-            'account_status': 'Matched Account Status', 'total_open_opps': 'Matched Total Open Opps'
-        }
-        output_df = output_df.rename(columns=final_rename_map)
+        # Clean up columns for final output
+        output_df.drop(columns=['original_index', 'accountid', 'matched_accountid_sf'], inplace=True, errors='ignore')
         
-        output_df.drop(columns=['original_index'], inplace=True, errors='ignore')
-
-        unmatched_ids = scrub_df['original_index']
+        # Identify unmatched records from the original input
+        unmatched_ids = original_scrub_df['original_index']
         if not final_matches.empty:
-            unmatched_ids = scrub_df[~scrub_df['original_index'].isin(final_matches['original_index'])]['original_index']
+            unmatched_ids = original_scrub_df[~original_scrub_df['original_index'].isin(final_matches['original_index'])]['original_index']
         unmatched_df = original_scrub_df[original_scrub_df['original_index'].isin(unmatched_ids)]
         unmatched_df.drop(columns=['original_index'], inplace=True, errors='ignore')
 
@@ -265,19 +256,28 @@ class ContactScrubber:
 
     def _score_candidate_contact(self, scrub_row, db_row):
         score, match_details = 0, []
-        if scrub_row.get('email') and scrub_row.get('email') == db_row.get('email'):
+        
+        # Ensure scrub_row keys are lowercase for consistent access
+        scrub_row_lower = {k.lower(): v for k, v in scrub_row.items()}
+
+        if scrub_row_lower.get('email') and scrub_row_lower.get('email') == db_row.get('email'):
             email_score = float(self.weights.get('email', 0))
             score += email_score; match_details.append(f"Email({email_score:.0f})")
-        sim = fuzz.ratio(scrub_row.get('firstname', ''), db_row.get('firstname', ''))
+
+        sim = fuzz.ratio(scrub_row_lower.get('firstname', ''), db_row.get('firstname', ''))
         name_score = float(self.weights.get('first_name', 0)) * (sim / 100.0)
         if name_score > 0.1: score += name_score; match_details.append(f"First({name_score:.1f})")
-        sim = fuzz.ratio(scrub_row.get('lastname', ''), db_row.get('lastname', ''))
+
+        sim = fuzz.ratio(scrub_row_lower.get('lastname', ''), db_row.get('lastname', ''))
         name_score = float(self.weights.get('last_name', 0)) * (sim / 100.0)
         if name_score > 0.1: score += name_score; match_details.append(f"Last({name_score:.1f})")
-        sim = fuzz.token_set_ratio(scrub_row.get('title', ''), db_row.get('title', ''))
+        
+        sim = fuzz.token_set_ratio(scrub_row_lower.get('title', ''), db_row.get('title', ''))
         title_score = float(self.weights.get('title', 0)) * (sim / 100.0)
         if title_score > 0.1: score += title_score; match_details.append(f"Title({title_score:.1f})")
+        
         return score, ",".join(match_details)
+
 
     def run(self):
         """Executes the contact scrubbing workflow using live Salesforce data."""
@@ -325,7 +325,8 @@ class ContactScrubber:
             best_candidate_details = None
             highest_score = -1
             for candidate_row in candidates:
-                score, details = self._score_candidate_contact(scrub_row, candidate_row)
+                # Pass scrub_row as a dictionary
+                score, details = self._score_candidate_contact(scrub_row.to_dict(), candidate_row)
                 if score > highest_score:
                     highest_score = score
                     best_candidate_details = {

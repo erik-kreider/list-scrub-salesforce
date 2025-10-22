@@ -3,8 +3,8 @@ import os
 
 def load_scrub_file(filepath: str) -> pd.DataFrame:
     """
-    Loads a local Excel file (the list to be scrubbed) and standardizes
-    all column headers to be lowercase and stripped of whitespace.
+    Loads a local Excel file (the list to be scrubbed), preserving
+    original column headers.
     """
     expanded_path = os.path.expanduser(filepath)
     if not os.path.exists(expanded_path):
@@ -12,9 +12,6 @@ def load_scrub_file(filepath: str) -> pd.DataFrame:
     
     print(f"Loading scrub file: {expanded_path}")
     df = pd.read_excel(expanded_path)
-    
-    # Standardize column headers
-    df.columns = df.columns.str.lower().str.strip()
     
     print(f"-> Successfully loaded {len(df):,} records from scrub file.")
     return df
