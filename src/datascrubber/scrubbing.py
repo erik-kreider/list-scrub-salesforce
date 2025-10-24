@@ -211,21 +211,28 @@ class AccountScrubber:
         # Combine email and fuzzy matches
         final_matches = pd.concat([email_matches_final, fuzzy_matches_df], ignore_index=True)
 
-        # Prepare for merge by renaming original SF 'Id' to avoid clashes
-        if 'Id' in final_matches.columns:
-            final_matches = final_matches.rename(columns={'Id': 'matched_accountid_sf'})
+        if final_matches.empty:
+            print("-> No matches found during this run.")
+            output_df = original_scrub_df.copy()
+        else:
+            # Prepare for merge by renaming original SF 'Id' to avoid clashes
+            if 'Id' in final_matches.columns:
+                final_matches = final_matches.rename(columns={'Id': 'matched_accountid_sf'})
 
-        # Merge results back to the original dataframe
-        output_df = pd.merge(original_scrub_df, final_matches, on='original_index', how='left')
+            # Merge results back to the original dataframe
+            output_df = pd.merge(original_scrub_df, final_matches, on='original_index', how='left')
         
         # Clean up columns for final output
         output_df.drop(columns=['original_index', 'accountid', 'matched_accountid_sf'], inplace=True, errors='ignore')
         
         # Identify unmatched records from the original input
-        unmatched_ids = original_scrub_df['original_index']
-        if not final_matches.empty:
-            unmatched_ids = original_scrub_df[~original_scrub_df['original_index'].isin(final_matches['original_index'])]['original_index']
-        unmatched_df = original_scrub_df[original_scrub_df['original_index'].isin(unmatched_ids)]
+        # If final_matches was empty, ALL records are unmatched.
+        if final_matches.empty:
+             unmatched_df = original_scrub_df.copy()
+        else:
+             unmatched_ids = original_scrub_df[~original_scrub_df['original_index'].isin(final_matches['original_index'])]['original_index']
+             unmatched_df = original_scrub_df[original_scrub_df['original_index'].isin(unmatched_ids)].copy()
+
         unmatched_df.drop(columns=['original_index'], inplace=True, errors='ignore')
 
         data_io.save_to_excel(output_df, self.output_path)
